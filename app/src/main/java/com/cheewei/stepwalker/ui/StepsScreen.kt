@@ -3,15 +3,11 @@ package com.cheewei.stepwalker.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,24 +24,18 @@ import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.cheewei.stepwalker.data.HealthConnectStepsReader
-import com.cheewei.stepwalker.data.DailySteps
+import com.cheewei.stepwalker.data.StepsSnapshot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import java.text.NumberFormat
 import java.time.Duration
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
-import java.util.Locale
-import kotlin.math.roundToLong
 
 private sealed interface StepsState {
     object Loading : StepsState
     data class Unavailable(val needsUpdate: Boolean) : StepsState
     object PermissionRequired : StepsState
-    data class Loaded(val history: List<DailySteps>) : StepsState {
-        val steps: Long get() = history.last().steps
-    }
+    data class Loaded(val snapshot: StepsSnapshot) : StepsState
     object Error : StepsState
 }
 
@@ -68,7 +58,7 @@ fun StepsScreen(reader: HealthConnectStepsReader, dailyGoal: Long = DEFAULT_DAIL
                 state = try {
                     when (reader.availability()) {
                         HealthConnectClient.SDK_AVAILABLE -> {
-                            if (reader.hasPermission()) StepsState.Loaded(reader.readLastSevenDaysSteps())
+                            if (reader.hasPermission()) StepsState.Loaded(reader.readSnapshot())
                             else StepsState.PermissionRequired
                         }
                         HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED ->
@@ -95,15 +85,21 @@ fun StepsScreen(reader: HealthConnectStepsReader, dailyGoal: Long = DEFAULT_DAIL
         }
     }
 
+    val current = state
+    if (current is StepsState.Loaded) {
+        StepsScreenContent(current.snapshot, dailyGoal, onRefresh = { refresh++ })
+        return
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("StepWalker", style = MaterialTheme.typography.headlineMedium)
-        when (val current = state) {
+        StepHeader()
+        when (current) {
             StepsState.Loading -> {
-                Text("Loading today's steps…")
+                Text("Loading your daily rematch...")
             }
             is StepsState.Unavailable -> {
                 Text(if (current.needsUpdate)
@@ -122,50 +118,11 @@ fun StepsScreen(reader: HealthConnectStepsReader, dailyGoal: Long = DEFAULT_DAIL
                 }) { Text("Allow reading steps") }
                 Text("If the permission prompt no longer appears, enable Steps for StepWalker in Health Connect settings.")
             }
-            is StepsState.Loaded -> {
-                val goal = DailyStepGoal(current.steps, dailyGoal)
-                val numbers = NumberFormat.getIntegerInstance()
-                Text("Steps Today", style = MaterialTheme.typography.headlineSmall)
-                Text(numbers.format(current.steps), style = MaterialTheme.typography.displayLarge)
-                Text("/ ${numbers.format(dailyGoal)} steps")
-                Text("${goal.percentage}%", style = MaterialTheme.typography.headlineSmall)
-                LinearProgressIndicator(progress = goal.progress, modifier = Modifier.fillMaxWidth())
-                Text("From local midnight to the last refresh.")
-                if (current.steps == 0L) Text("No steps available yet. Check your watch sync and Health Connect data.")
-                Button(onClick = { refresh++ }) { Text("Refresh") }
-                StepHistory(current.history)
-            }
             StepsState.Error -> {
                 Text("Error reading step data. Check Health Connect and try again.")
                 Button(onClick = { refresh++ }) { Text("Try again") }
             }
+            is StepsState.Loaded -> Unit
         }
-    }
-}
-
-@Composable
-private fun StepHistory(history: List<DailySteps>) {
-    val numbers = NumberFormat.getIntegerInstance()
-    val dates = DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault())
-    val today = history.last().date
-    val total = history.sumOf { it.steps }
-    val average = (total.toDouble() / history.size).roundToLong()
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("Step History", style = MaterialTheme.typography.headlineSmall)
-        history.forEach { day ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(if (day.date == today) "Today" else day.date.format(dates))
-                Text("${numbers.format(day.steps)} steps")
-            }
-        }
-        Text("7-day total: ${numbers.format(total)} steps")
-        Text("Daily average: ${numbers.format(average)} steps")
     }
 }

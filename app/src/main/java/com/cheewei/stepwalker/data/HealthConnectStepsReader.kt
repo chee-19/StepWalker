@@ -1,6 +1,7 @@
 package com.cheewei.stepwalker.data
 
 import android.content.Context
+import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.StepsRecord
@@ -26,8 +27,25 @@ class HealthConnectStepsReader(context: Context) {
         return readGarminSteps(midnight.toInstant(), now.toInstant())
     }
 
-    suspend fun readLastSevenDaysSteps(): List<DailySteps> {
+    suspend fun readSnapshot(): StepsSnapshot {
         val now = ZonedDateTime.now()
+        val ranges = GhostTimeRanges(now)
+        val history = readLastSevenDaysSteps(now)
+        val yesterdaySteps = readGarminSteps(
+            ranges.yesterdayStart.toInstant(), ranges.yesterdayEnd.toInstant()
+        )
+        val ghost = GhostComparison(history.last().steps, yesterdaySteps)
+        Log.d("StepWalkerGhost", "Today range = ${ranges.todayStart} -> $now")
+        Log.d("StepWalkerGhost", "Yesterday range = ${ranges.yesterdayStart} -> ${ranges.yesterdayEnd}")
+        Log.d("StepWalkerGhost", "Today = ${ghost.todaySteps}")
+        Log.d("StepWalkerGhost", "YesterdaySameTime = ${ghost.yesterdaySameTimeSteps}")
+        Log.d("StepWalkerGhost", "Difference = ${if (ghost.difference > 0) "+" else ""}${ghost.difference}; Status = ${ghost.status}")
+        return StepsSnapshot(history, ghost)
+    }
+
+    suspend fun readLastSevenDaysSteps(): List<DailySteps> = readLastSevenDaysSteps(ZonedDateTime.now())
+
+    private suspend fun readLastSevenDaysSteps(now: ZonedDateTime): List<DailySteps> {
         val today = now.toLocalDate()
         val history = mutableListOf<DailySteps>()
         for (daysAgo in 6 downTo 0) {
@@ -42,6 +60,8 @@ class HealthConnectStepsReader(context: Context) {
     }
 
     private suspend fun readGarminSteps(start: Instant, end: Instant): Long {
+        // At exact local midnight the elapsed interval is empty.
+        if (!end.isAfter(start)) return 0L
         val result = client.aggregate(
             AggregateRequest(
                 metrics = setOf(StepsRecord.COUNT_TOTAL),
